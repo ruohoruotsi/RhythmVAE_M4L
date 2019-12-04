@@ -28,8 +28,10 @@ class DataHandler {
     // Shuffled indices for both training and test data
     this.trainIndices = tf.util.createShuffledIndices(this.NUM_TRAIN_ELEMENTS);
     this.testIndices = tf.util.createShuffledIndices(this.NUM_TEST_ELEMENTS);
+  }
 
-    console.log(this.trainIndices);
+  getDataSize(){
+    return this.dataset.length;
   }
 
   nextTrainBatch(batchSize) {

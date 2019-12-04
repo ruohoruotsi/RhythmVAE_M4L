@@ -2,14 +2,24 @@
 	"name" : "M4L.RhythmVAE",
 	"version" : 1,
 	"creationdate" : 3650640218,
-	"modificationdate" : 3650640361,
-	"viewrect" : [ 25.0, 70.0, 300.0, 500.0 ],
+	"modificationdate" : 3657019125,
+	"viewrect" : [ 24.0, 229.0, 300.0, 500.0 ],
 	"autoorganize" : 1,
 	"hideprojectwindow" : 0,
 	"showdependencies" : 1,
 	"autolocalize" : 0,
 	"contents" : 	{
 		"patchers" : 		{
+			"count_for_me.maxpat" : 			{
+				"kind" : "patcher",
+				"local" : 1,
+				"singleton" : 				{
+					"bootpath" : "~/git/_Public/RhythmVAE_M4L/subpatches",
+					"projectrelativepath" : "../subpatches"
+				}
+
+			}
+,
 			"rhythmvae.maxpat" : 			{
 				"kind" : "patcher",
 				"local" : 1,
@@ -19,6 +29,21 @@
 					"projectrelativepath" : ".."
 				}
 
+			}
+,
+			"makenote_for_me.maxpat" : 			{
+				"kind" : "patcher",
+				"local" : 1
+			}
+,
+			"setup_1_16.maxpat" : 			{
+				"kind" : "patcher",
+				"local" : 1
+			}
+,
+			"shuffle_metro.maxpat" : 			{
+				"kind" : "patcher",
+				"local" : 1
 			}
 
 		}
@@ -51,6 +76,15 @@
 			"enabled" : 1,
 			"includeincollective" : 1
 		}
+,
+		"2" : 		{
+			"bootpath" : "~/git/_Public/RhythmVAE_M4L/subpatches",
+			"projectrelativepath" : "../subpatches",
+			"label" : "",
+			"recursive" : 1,
+			"enabled" : 1,
+			"includeincollective" : 1
+		}
 
 	}
 ,
@@ -60,5 +94,5 @@
 	"devpathtype" : 0,
 	"devpath" : ".",
 	"sortmode" : 0,
-	"viewmode" : 0
+	"viewmode" : 1
 }

@@ -19,7 +19,9 @@ const vae = require('./src/vae.js');
 Max.post(`Loaded the ${path.basename(__filename)} script`);
 
 // Global varibles
-var train_data = [];
+var train_data_onsets = []; 
+var train_data_velocities = []; 
+var train_data_timeshifts = [];
 var isGenerating = false;
 
 function isValidMIDIFile(midiFile){
@@ -41,7 +43,7 @@ function getNoteIndexAndTimeshift(note, tempo){
     const half_unit = unit * 0.5;
 
     const index = Math.max(0, Math.floor((note.time + half_unit) / unit)) // centering 
-    const timeshift = note.time - unit * index;
+    const timeshift = (note.time - unit * index)/half_unit; // normalized
 
     return [index, timeshift];
 }
@@ -50,7 +52,10 @@ function getNoteIndexAndTimeshift(note, tempo){
 function processPianoroll(midiFile){
     const tempo = getTempo(midiFile);
 
-    var pianorolls = [];
+    // data array
+    var onsets = [];
+    var velocities = [];
+    var timeshifts = [];
 
     midiFile.tracks.forEach(track => {
     
@@ -60,22 +65,35 @@ function processPianoroll(midiFile){
             if ((note.midi in MIDI_DRUM_MAP)){
                 let timing = getNoteIndexAndTimeshift(note, tempo);
                 let index = timing[0];
+                let timeshift = timing[1];
                 
                 // add new array
-                if (Math.floor(index / LOOP_DURATION) >= pianorolls.length){
-                    pianorolls.push(utils.create2DArray(NUM_DRUM_CLASSES, LOOP_DURATION));
+                if (Math.floor(index / LOOP_DURATION) >= onsets.length){
+                    onsets.push(utils.create2DArray(NUM_DRUM_CLASSES, LOOP_DURATION));
+                    velocities.push(utils.create2DArray(NUM_DRUM_CLASSES, LOOP_DURATION));
+                    timeshifts.push(utils.create2DArray(NUM_DRUM_CLASSES, LOOP_DURATION));
                 }
-                let matrix = pianorolls[Math.floor(index / LOOP_DURATION)];
+
+                // store velocity
                 let drum_id = MIDI_DRUM_MAP[note.midi];
-                matrix[drum_id][index % LOOP_DURATION] = note.velocity;       
+
+                let matrix = onsets[Math.floor(index / LOOP_DURATION)];
+                matrix[drum_id][index % LOOP_DURATION] = 1;    // 1 for onsets
+
+                matrix = velocities[Math.floor(index / LOOP_DURATION)];
+                matrix[drum_id][index % LOOP_DURATION] = note.velocity;    // normalized 0 - 1
+                
+                // store timeshift
+                matrix = timeshifts[Math.floor(index / LOOP_DURATION)];
+                matrix[drum_id][index % LOOP_DURATION] = timeshift;    // normalized -1 - 1
             }
         })
     })
 
     /*    for debug - output pianoroll */
-    // if (pianorolls.length > 0){ 
-    //     var index = utils.getRandomInt(pianorolls.length); 
-    //     let x = pianorolls[index];
+    // if (velocities.length > 0){ 
+    //     var index = utils.getRandomInt(velocities.length); 
+    //     let x = velocities[index];
     //     for (var i=0; i< NUM_DRUM_CLASSES; i++){
     //         for (var j=0; j < LOOP_DURATION; j++){
     //             Max.outlet("matrix_output", j, i, Math.ceil(x[i][j]));
@@ -84,8 +102,10 @@ function processPianoroll(midiFile){
     // }
     
     // 2D array to tf.tensor2d
-    for (var i=0; i < pianorolls.length; i++){
-        train_data.push(tf.tensor2d(pianorolls[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
+    for (var i=0; i < onsets.length; i++){
+        train_data_onsets.push(tf.tensor2d(onsets[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
+        train_data_velocities.push(tf.tensor2d(velocities[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
+        train_data_timeshifts.push(tf.tensor2d(timeshifts[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
     }
 }
 
@@ -113,14 +133,18 @@ Max.addHandler("midi", (filename) =>  {
     // is directory? 
     if (fs.existsSync(filename) && fs.lstatSync(filename).isDirectory()){
         // iterate over *.mid or *.midi files 
-        // TODO: it may match *.mido *.midifile *.middleageman etc...
-        glob(filename + '/**/*.mid*', {}, (err, files)=>{
-            if (err) console.error(err); 
+        glob(filename + '**/*.+(mid|midi)', {}, (err, files)=>{
+            utils.post("# of files in dir: " + files.length); 
+            if (err) utils.error(err); 
             else {
-                for (var idx in files){
-                    if (processMidiFile(files[idx])) count += 1;
+                for (var idx in files){   
+                    try {
+                        if (processMidiFile(files[idx])) count += 1;
+                    } catch(error) {
+                        console.error("failed to process " + files[idx] + " - " + error);
+                      }
                 }
-                Max.post("# of midi files added: " + count);    
+                utils.post("# of midi files added: " + count);    
                 reportNumberOfBars();
             }
         })
@@ -128,7 +152,6 @@ Max.addHandler("midi", (filename) =>  {
         if (processMidiFile(filename)) count += 1;
         Max.post("# of midi files added: " + count);    
         reportNumberOfBars();
-
     }
 });
 
@@ -140,9 +163,9 @@ Max.addHandler("train", ()=>{
     }
 
     utils.log_status("Start training...");
-    console.log("# of bars in training data:", train_data.length * 2);
+    console.log("# of bars in training data:", train_data_onsets.length * 2);
     reportNumberOfBars();
-    vae.loadAndTrain(train_data);
+    vae.loadAndTrain(train_data_onsets, train_data_velocities, train_data_timeshifts);
 });
 
 // Generate a rhythm pattern
@@ -159,26 +182,31 @@ async function generatePattern(z1, z2, threshold){
       if (isGenerating) return;
   
       isGenerating = true;
-      let pattern = vae.generatePattern(z1, z2);
+      let [onsets, velocities, timeshifts] = vae.generatePattern(z1, z2);
       Max.outlet("matrix_clear",1); // clear all
       for (var i=0; i< NUM_DRUM_CLASSES; i++){
-          var sequence = [];
+          var sequence = []; // for velocity
+          var sequenceTS = []; // for timeshift
           // output for matrix view
           for (var j=0; j < LOOP_DURATION; j++){
               var x = 0.0;
               // if (pattern[i * LOOP_DURATION + j] > 0.2) x = 1;
-              if (pattern[i][j] > threshold){ 
+              if (onsets[i][j] > threshold){ 
                 x = 1;
                 Max.outlet("matrix_output", j + 1, i + 1, x); // index for live.grid starts from 1
+           
+                // for live.step
+                sequence.push(Math.floor(velocities[i][j]*127.));
+                sequenceTS.push(Math.floor(utils.scale(timeshifts[i][j], -1., 1, 0, 127)));
+              } else {
+                sequence.push(0);
+                sequenceTS.push(64);
               }
-
-              // for live.step
-              if (pattern[i][j] > threshold) sequence.push(Math.floor(pattern[i][j]*127.));
-              else sequence.push(0);
           }
   
           // output for live.step object
           Max.outlet("seq_output", i+1, sequence.join(" "));
+          Max.outlet("timeshift_output", i+1, sequenceTS.join(" "));
       }
       Max.outlet("generated", 1);
       utils.log_status("");
@@ -190,12 +218,32 @@ async function generatePattern(z1, z2, threshold){
 
 // Clear training data 
 Max.addHandler("clear_train", ()=>{
-    train_data = [];  // clear
+    train_data_onsets = []; // clear
+    train_data_velocities = [];
+    train_data_timeshift = [];  
+
     reportNumberOfBars();
 });
 
 Max.addHandler("stop", ()=>{
     vae.stopTraining();
+});
+
+Max.addHandler("savemodel", (path)=>{
+    // check if already trained or not
+    if (vae.isReadyToGenerate()){
+        filepath = "file://" + path;
+        vae.saveModel(filepath);
+        utils.log_status("Model saved.");
+    } else {
+        utils.error_status("Train a model first!");
+    }
+});
+
+Max.addHandler("loadmodel", (path)=>{
+    filepath = "file://" + path;
+    vae.loadModel(filepath);
+    utils.log_status("Model loaded!");
 });
 
 Max.addHandler("epochs", (e)=>{
@@ -204,5 +252,5 @@ Max.addHandler("epochs", (e)=>{
 });
 
 function reportNumberOfBars(){
-    Max.outlet("train_bars", train_data.length * 2);  // number of bars for training
+    Max.outlet("train_bars", train_data_onsets.length * 2);  // number of bars for training
 }
