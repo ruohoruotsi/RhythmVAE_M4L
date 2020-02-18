@@ -10,6 +10,7 @@ const MIDI_DRUM_MAP = require('./src/constants.js').MIDI_DRUM_MAP;
 const DRUM_CLASSES = require('./src/constants.js').DRUM_CLASSES;
 const NUM_DRUM_CLASSES = require('.//src/constants.js').NUM_DRUM_CLASSES;
 const LOOP_DURATION = require('.//src/constants.js').LOOP_DURATION;
+const MIN_ONSETS_THRESHOLD = require('./src/constants.js').MIN_ONSETS_THRESHOLD;
 
 // VAE model and Utilities
 const utils = require('./src/utils.js');
@@ -48,6 +49,16 @@ function getNoteIndexAndTimeshift(note, tempo){
     return [index, timeshift];
 }
 
+function getNumOfDrumOnsets(onsets){
+    var count = 0;
+    for (var i = 0; i < NUM_DRUM_CLASSES; i++){
+        for (var j=0; j < LOOP_DURATION; j++){
+            if (onsets[i][j] > 0) count += 1;
+        }
+    }
+    return count;
+}
+
 // Convert midi into pianoroll matrix
 function processPianoroll(midiFile){
     const tempo = getTempo(midiFile);
@@ -68,7 +79,7 @@ function processPianoroll(midiFile){
                 let timeshift = timing[1];
                 
                 // add new array
-                if (Math.floor(index / LOOP_DURATION) >= onsets.length){
+                while (Math.floor(index / LOOP_DURATION) >= onsets.length){
                     onsets.push(utils.create2DArray(NUM_DRUM_CLASSES, LOOP_DURATION));
                     velocities.push(utils.create2DArray(NUM_DRUM_CLASSES, LOOP_DURATION));
                     timeshifts.push(utils.create2DArray(NUM_DRUM_CLASSES, LOOP_DURATION));
@@ -103,9 +114,11 @@ function processPianoroll(midiFile){
     
     // 2D array to tf.tensor2d
     for (var i=0; i < onsets.length; i++){
-        train_data_onsets.push(tf.tensor2d(onsets[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
-        train_data_velocities.push(tf.tensor2d(velocities[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
-        train_data_timeshifts.push(tf.tensor2d(timeshifts[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
+        if (getNumOfDrumOnsets(onsets[i]) > MIN_ONSETS_THRESHOLD){
+            train_data_onsets.push(tf.tensor2d(onsets[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
+            train_data_velocities.push(tf.tensor2d(velocities[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
+            train_data_timeshifts.push(tf.tensor2d(timeshifts[i], [NUM_DRUM_CLASSES, LOOP_DURATION]));
+        }
     }
 }
 
@@ -169,35 +182,33 @@ Max.addHandler("train", ()=>{
 });
 
 // Generate a rhythm pattern
-Max.addHandler("generate", (z1, z2, threshold)=>{
+Max.addHandler("generate", (z1, z2, threshold, noise_range = 0.0)=>{
     try {
-        generatePattern(z1, z2, threshold);
+        generatePattern(z1, z2, threshold, noise_range);
     } catch(error) {
         error_status(error);
     }
 });
 
-async function generatePattern(z1, z2, threshold){
+async function generatePattern(z1, z2, threshold, noise_range){
     if (vae.isReadyToGenerate()){    
       if (isGenerating) return;
   
       isGenerating = true;
-      let [onsets, velocities, timeshifts] = vae.generatePattern(z1, z2);
-      Max.outlet("matrix_clear",1); // clear all
+      let [onsets, velocities, timeshifts] = vae.generatePattern(z1, z2, noise_range);
+      Max.outlet("matrix_clear", 1); // clear all
       for (var i=0; i< NUM_DRUM_CLASSES; i++){
           var sequence = []; // for velocity
           var sequenceTS = []; // for timeshift
           // output for matrix view
           for (var j=0; j < LOOP_DURATION; j++){
-              var x = 0.0;
               // if (pattern[i * LOOP_DURATION + j] > 0.2) x = 1;
-              if (onsets[i][j] > threshold){ 
-                x = 1;
-                Max.outlet("matrix_output", j + 1, i + 1, x); // index for live.grid starts from 1
+              if (onsets[i][j] > threshold){
+                Max.outlet("matrix_output", j + 1, i + 1, 1); // index for live.grid starts from 1
            
                 // for live.step
-                sequence.push(Math.floor(velocities[i][j]*127.));
-                sequenceTS.push(Math.floor(utils.scale(timeshifts[i][j], -1., 1, 0, 127)));
+                sequence.push(Math.floor(velocities[i][j]*127.)); // 0-1 -> 0-127
+                sequenceTS.push(Math.floor(utils.scale(timeshifts[i][j], -1., 1, 0, 127))); // -1 - 1 -> 0 - 127
               } else {
                 sequence.push(0);
                 sequenceTS.push(64);
